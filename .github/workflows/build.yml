@@ -43,8 +43,8 @@ jobs:
     needs: prepare  # 确保这个作业在 prepare 作业完成后运行
     strategy:
       matrix:
-        goos: [linux, darwin, freebsd]
-        goarch: [amd64, arm64]
+        goos: [linux]
+        goarch: [amd64]
     env:
       OUTPUT_BINARY: ghproxy
       GO_VERSION: 1.24
