@@ -1,11 +1,13 @@
 package auth
 
 import (
+	"context"
 	"fmt"
 	"ghproxy/config"
 
 	"github.com/WJQSERVER-STUDIO/logger"
 	"github.com/cloudwego/hertz/pkg/app"
+	"github.com/redis/go-redis/v9"
 )
 
 var (
@@ -15,6 +17,8 @@ var (
 	logInfo    = logger.LogInfo
 	logWarning = logger.LogWarning
 	logError   = logger.LogError
+	rdbCtx     context.Context
+	rdb        *redis.Client
 )
 
 func Init(cfg *config.Config) {
@@ -30,6 +34,18 @@ func Init(cfg *config.Config) {
 		if err != nil {
 			logError(err.Error())
 			return
+		}
+	}
+	if cfg.Auth.RedisAddr != "" {
+		rdbCtx = context.Background()
+		rdb = redis.NewClient(&redis.Options{
+			Addr:     cfg.Auth.RedisAddr,
+			Password: cfg.Auth.RedisPassword,
+			DB:       cfg.Auth.RedisDB,
+		})
+		_, err := rdb.Ping(rdbCtx).Result()
+		if err != nil {
+			panic(err.Error())
 		}
 	}
 	logDebug("Auth Init")

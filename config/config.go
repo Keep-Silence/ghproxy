@@ -119,6 +119,9 @@ type AuthConfig struct {
 	Token         string `toml:"token"`
 	PassThrough   bool   `toml:"passThrough"`
 	ForceAllowApi bool   `toml:"ForceAllowApi"`
+	RedisAddr     string `toml:"redisAddr"`
+	RedisPassword string `toml:"redisPassword"`
+	RedisDB       int    `toml:"redisDB"`
 }
 
 type BlacklistConfig struct {

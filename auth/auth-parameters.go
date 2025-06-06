@@ -3,6 +3,7 @@ package auth
 import (
 	"fmt"
 	"ghproxy/config"
+	"strings"
 
 	"github.com/cloudwego/hertz/pkg/app"
 )
@@ -25,6 +26,12 @@ func AuthParametersHandler(c *app.RequestContext, cfg *config.Config) (isValid b
 		return false, fmt.Errorf("Auth token not found")
 	}
 
+	if strings.HasPrefix(authToken, "Bearer ") {
+		authToken = strings.TrimPrefix(authToken, "Bearer ")
+	}
+	if rdb != nil && rdb.Exists(rdbCtx, authToken).Val() > 0 {
+		return true, nil
+	}
 	isValid = authToken == cfg.Auth.Token
 	if !isValid {
 		return false, fmt.Errorf("Auth token invalid")
