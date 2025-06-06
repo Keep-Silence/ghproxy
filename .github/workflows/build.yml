@@ -137,7 +137,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           file: ./${{ env.DOCKERFILE }}
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
           push: true
           tags: | 
             ${{ env.IMAGE_NAME }}:${{ env.VERSION }}
