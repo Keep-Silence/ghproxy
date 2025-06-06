@@ -1,6 +1,6 @@
 FROM alpine:latest AS builder
 
-ARG USER=WJQSERVER-STUDIO
+ARG USER=Keep-Silence
 ARG REPO=ghproxy
 ARG APPLICATION=ghproxy
 ARG BRANCH=dev
@@ -34,7 +34,7 @@ FROM alpine:latest
 
 RUN apk add --no-cache curl
 
-ARG USER=WJQSERVER-STUDIO
+ARG USER=Keep-Silence
 ARG REPO=ghproxy
 ARG BRANCH=v3
 ARG APPLICATION=ghproxy

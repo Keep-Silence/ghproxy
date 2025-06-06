@@ -44,6 +44,9 @@ key = ""
 enabled = false
 passThrough = false
 ForceAllowApi = false
+redisAddr = ""
+redisPassword = ""
+redisDB = 0
 
 [blacklist]
 blacklistFile = "/data/ghproxy/config/blacklist.json"
