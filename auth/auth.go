@@ -39,9 +39,10 @@ func Init(cfg *config.Config) {
 	if cfg.Auth.RedisAddr != "" {
 		rdbCtx = context.Background()
 		rdb = redis.NewClient(&redis.Options{
-			Addr:     cfg.Auth.RedisAddr,
-			Password: cfg.Auth.RedisPassword,
-			DB:       cfg.Auth.RedisDB,
+			Addr:         cfg.Auth.RedisAddr,
+			Password:     cfg.Auth.RedisPassword,
+			DB:           cfg.Auth.RedisDB,
+			MinIdleConns: 1,
 		})
 		_, err := rdb.Ping(rdbCtx).Result()
 		if err != nil {
