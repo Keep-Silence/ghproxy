@@ -9,13 +9,18 @@ import (
 	"ghproxy/config"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
+	"path"
 	"path/filepath"
+	"regexp"
 	"strconv"
 
 	"github.com/WJQSERVER-STUDIO/go-utils/limitreader"
 	"github.com/cloudwego/hertz/pkg/app"
 )
+
+var keyNameMap = make(map[string]string)
 
 func ChunkedProxyRequest(ctx context.Context, c *app.RequestContext, u string, cfg *config.Config, matcher string) {
 
@@ -49,11 +54,28 @@ func ChunkedProxyRequest(ctx context.Context, c *app.RequestContext, u string, c
 	setRequestHeaders(c, req, cfg, matcher)
 	AuthPassThrough(c, cfg, req)
 
+	cacheUrl := u
+	parseUrl, err := url.Parse(u)
+	if err == nil {
+		query := parseUrl.Query()
+		query.Del(cfg.Auth.Key)
+		parseUrl.RawQuery = query.Encode()
+		cacheUrl = parseUrl.String()
+	}
+
 	isCache := string(c.Request.Method()) == http.MethodGet
-	if isCache {
-		if reader, info, err := loadFromCache(http.MethodGet, u); err == nil {
+	if filename, ok := keyNameMap[cacheUrl]; ok && isCache {
+		if reader, info, err := loadFromCache(http.MethodGet, cacheUrl); err == nil {
 			logDebug("Cache HIT: %s", u)
+			buf := make([]byte, 512)
+			n, _ := reader.Read(buf)
+			contentType := http.DetectContentType(buf[:n])
+			reader.Seek(0, 0)
+
 			c.Header("X-Cache", "HIT")
+			c.Header("Content-Type", contentType)
+			c.Header("Content-Disposition", "attachment; filename="+filename)
+			c.Header("Content-Length", strconv.FormatInt(info.Size(), 10))
 			c.SetBodyStream(reader, int(info.Size()))
 			return
 		}
@@ -119,9 +141,28 @@ func ChunkedProxyRequest(ctx context.Context, c *app.RequestContext, u string, c
 
 	c.Status(resp.StatusCode)
 
-	var buf bytes.Buffer
-	bodyReader := io.TeeReader(resp.Body, &buf)
-	defer resp.Body.Close()
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		logError("%s %s %s %s %s Failed to copy response body: %v", c.ClientIP(), c.Request.Method(), u, c.Request.Header.Get("User-Agent"), c.Request.Header.GetProtocol(), err)
+		ErrorPage(c, NewErrorWithStatusLookup(500, fmt.Sprintf("Failed to copy response body: %v", err)))
+	}
+
+	if isCache {
+		go func() {
+			// 异步写入缓存
+			fileName := DetectFilename(resp)
+			keyNameMap[cacheUrl] = fileName
+			err := saveToCache(http.MethodGet, cacheUrl, bodyBytes)
+			if err != nil {
+				logWarning("Cache save failed: %v", err)
+			} else {
+				logDebug("Cache saved: %s", cacheUrl)
+			}
+		}()
+	}
+
+	resp.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+	bodyReader := resp.Body
 
 	if cfg.RateLimit.BandwidthLimit.Enabled {
 		bodyReader = limitreader.NewRateLimitedReader(bodyReader, bandwidthLimit, int(bandwidthBurst), ctx)
@@ -153,32 +194,20 @@ func ChunkedProxyRequest(ctx context.Context, c *app.RequestContext, u string, c
 		}
 		c.SetBodyStream(bodyReader, -1)
 	}
-	if isCache {
-		// 异步写入缓存
-		go func() {
-			err := saveToCache(http.MethodGet, u, &buf)
-			if err != nil {
-				logWarning("Cache save failed: %v", err)
-			} else {
-				logDebug("Cache saved: %s", u)
-			}
-		}()
-		return
-	}
 }
 
-var cacheDir = "~/.ghproxy_cache" // 可配置
+var cacheDir = os.TempDir()
 
 func cacheKey(method, url string) string {
 	hash := sha256.Sum256([]byte(method + "::" + url))
 	return hex.EncodeToString(hash[:])
 }
 
-func cachePath(method, url string) string {
-	return filepath.Join(cacheDir, cacheKey(method, url))
+func cachePath(method, urlStr string) string {
+	return filepath.Join(cacheDir, cacheKey(method, urlStr))
 }
 
-func loadFromCache(method, url string) (io.ReadCloser, os.FileInfo, error) {
+func loadFromCache(method, url string) (*os.File, os.FileInfo, error) {
 	path := cachePath(method, url)
 	f, err := os.Open(path)
 	if err != nil {
@@ -192,7 +221,7 @@ func loadFromCache(method, url string) (io.ReadCloser, os.FileInfo, error) {
 	return f, info, nil
 }
 
-func saveToCache(method, url string, r io.Reader) error {
+func saveToCache(method, url string, r []byte) error {
 	path := cachePath(method, url)
 
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
@@ -204,13 +233,41 @@ func saveToCache(method, url string, r io.Reader) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
 
-	_, err = io.Copy(f, r)
+	_, err = f.Write(r)
 	if err != nil {
 		os.Remove(tmpPath)
 		return err
 	}
 
+	f.Close()
 	return os.Rename(tmpPath, path)
+}
+
+// 提取 Content-Disposition 中的 filename=
+func getFilenameFromContentDisposition(cd string) string {
+	// RFC6266 支持的格式：filename="xxx.ext"
+	re := regexp.MustCompile(`(?i)filename="?([^\";]+)"?`)
+	matches := re.FindStringSubmatch(cd)
+	if len(matches) >= 2 {
+		return matches[1]
+	}
+	return "unknown_filename"
+}
+
+func filenameFromURL(rawurl string) string {
+	u, err := url.Parse(rawurl)
+	if err != nil {
+		return "unknown"
+	}
+	return path.Base(u.Path)
+}
+
+func DetectFilename(resp *http.Response) string {
+	cd := resp.Header.Get("Content-Disposition")
+	name := getFilenameFromContentDisposition(cd)
+	if name != "unknown_filename" {
+		return name
+	}
+	return filenameFromURL(resp.Request.URL.String())
 }
