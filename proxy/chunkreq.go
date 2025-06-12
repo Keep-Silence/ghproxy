@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -118,7 +119,9 @@ func ChunkedProxyRequest(ctx context.Context, c *app.RequestContext, u string, c
 
 	c.Status(resp.StatusCode)
 
-	bodyReader := resp.Body
+	var buf bytes.Buffer
+	bodyReader := io.TeeReader(resp.Body, &buf)
+	defer resp.Body.Close()
 
 	if cfg.RateLimit.BandwidthLimit.Enabled {
 		bodyReader = limitreader.NewRateLimitedReader(bodyReader, bandwidthLimit, int(bandwidthBurst), ctx)
@@ -137,24 +140,6 @@ func ChunkedProxyRequest(ctx context.Context, c *app.RequestContext, u string, c
 		var reader io.Reader
 
 		reader, _, err = processLinks(bodyReader, compress, string(c.Request.Host()), cfg)
-		if isCache {
-			var teeBuf io.Reader
-			pr, pw := io.Pipe()
-			teeBuf = io.TeeReader(reader, pw)
-			c.SetBodyStream(pr, -1)
-
-			// 异步写入缓存
-			go func() {
-				defer pw.Close()
-				err := saveToCache(http.MethodGet, u, teeBuf)
-				if err != nil {
-					logWarning("Cache save failed: %v", err)
-				} else {
-					logDebug("Cache saved: %s", u)
-				}
-			}()
-			return
-		}
 		c.SetBodyStream(reader, -1)
 		if err != nil {
 			logError("%s %s %s %s %s Failed to copy response body: %v", c.ClientIP(), c.Request.Method(), u, c.Request.Header.Get("User-Agent"), c.Request.Header.GetProtocol(), err)
@@ -162,34 +147,24 @@ func ChunkedProxyRequest(ctx context.Context, c *app.RequestContext, u string, c
 			return
 		}
 	} else {
-		if isCache {
-			var teeBuf io.Reader
-			pr, pw := io.Pipe()
-			teeBuf = io.TeeReader(bodyReader, pw)
-			if contentLength != "" {
-				c.SetBodyStream(pr, bodySize)
-			}
-			c.SetBodyStream(pr, -1)
-
-			// 异步写入缓存
-			go func() {
-				defer pw.Close()
-				err := saveToCache(http.MethodGet, u, teeBuf)
-				if err != nil {
-					logWarning("Cache save failed: %v", err)
-				} else {
-					logDebug("Cache saved: %s", u)
-				}
-			}()
-			return
-		}
 		if contentLength != "" {
 			c.SetBodyStream(bodyReader, bodySize)
 			return
 		}
 		c.SetBodyStream(bodyReader, -1)
 	}
-
+	if isCache {
+		// 异步写入缓存
+		go func() {
+			err := saveToCache(http.MethodGet, u, &buf)
+			if err != nil {
+				logWarning("Cache save failed: %v", err)
+			} else {
+				logDebug("Cache saved: %s", u)
+			}
+		}()
+		return
+	}
 }
 
 var cacheDir = "~/.ghproxy_cache" // 可配置
