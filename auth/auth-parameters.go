@@ -27,7 +27,7 @@ func AuthParametersHandler(c *app.RequestContext, cfg *config.Config) (isValid b
 	}
 
 	if strings.HasPrefix(authToken, "Bearer ") {
-		authToken = strings.TrimPrefix(authToken, "Bearer ")
+		authToken = "token:" + strings.TrimPrefix(authToken, "Bearer ")
 	}
 	if rdb != nil && rdb.Exists(rdbCtx, authToken).Val() > 0 {
 		return true, nil
